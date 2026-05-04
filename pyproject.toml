@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Readable estimators for complier characteristics under binary IV designs."
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["numpy>=1.24"]
+dependencies = ["numpy>=1.24", "statsmodels>=0.14"]
 keywords = ["causal inference", "instrumental variables", "late", "compliers"]
 classifiers = [
   "Development Status :: 3 - Alpha",

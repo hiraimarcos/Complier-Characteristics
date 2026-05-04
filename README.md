@@ -47,7 +47,7 @@ The resulting design choices are:
 python3 -m pip install -e .
 ```
 
-The package only depends on `numpy`.
+The package depends on `numpy` and `statsmodels`.
 
 ## Quick Start
 
@@ -122,11 +122,11 @@ Supported nuisance strategies:
 - `propensity_model="constant"`:
   uses the sample instrument rate
 - `propensity_model="logit"`:
-  fits a simple logistic regression on the supplied covariates
+  fits a statsmodels logistic regression on the supplied covariates
 - `treatment_model="constant"`:
   uses within-instrument sample means for `E[D | Z=z, X]`
 - `treatment_model="logit"`:
-  fits separate logistic regressions in the `Z=0` and `Z=1` strata
+  fits separate statsmodels logistic regressions in the `Z=0` and `Z=1` strata
 
 The default is deliberately conservative:
 
