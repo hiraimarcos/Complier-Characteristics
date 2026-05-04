@@ -116,6 +116,9 @@ class ComplierEstimator:
         treated_if_z0: ArrayLike | None,
         treated_if_z1: ArrayLike | None,
     ) -> tuple[np.ndarray, np.ndarray]:
+        if (treated_if_z0 is None) != (treated_if_z1 is None):
+            raise ValueError("treated_if_z0 and treated_if_z1 must be supplied together.")
+
         if treated_if_z0 is not None and treated_if_z1 is not None:
             m0 = np.clip(dataset.resolve_feature(treated_if_z0, name="treated_if_z0"), self.clip, 1.0 - self.clip)
             m1 = np.clip(dataset.resolve_feature(treated_if_z1, name="treated_if_z1"), self.clip, 1.0 - self.clip)

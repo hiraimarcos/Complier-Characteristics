@@ -118,7 +118,7 @@ class ComplierDataset:
     def covariate_matrix(self, names: list[str] | None = None) -> NDArray[np.float64]:
         """Stack the requested covariates column-wise into an `n x p` matrix."""
 
-        selected_names = names or self.covariate_names()
+        selected_names = self.covariate_names() if names is None else names
         if not selected_names:
             return np.empty((self.n_obs, 0), dtype=float)
 
@@ -149,7 +149,10 @@ class ComplierDataset:
             raise KeyError(f"Unknown feature {feature!r}.")
 
         if callable(feature):
-            return _as_1d_array(feature(self), name=label)
+            resolved = _as_1d_array(feature(self), name=label)
+            if resolved.shape != self.instrument.shape:
+                raise ValueError(f"{label} must have length {self.n_obs}; got {resolved.size}.")
+            return resolved
 
         resolved = _as_1d_array(feature, name=label)
         if resolved.shape != self.instrument.shape:

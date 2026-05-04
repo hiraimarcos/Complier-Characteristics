@@ -62,7 +62,7 @@ class ComplierResult:
         label = name or (feature if isinstance(feature, str) else "moment")
         values = self._resolve(feature, name=label)
         numerator = float(np.mean(self.raw_scores * values))
-        estimate = float(np.mean(self.scaled_scores * values))
+        estimate = numerator / self.complier_share
         return ScalarEstimate(
             name=str(label),
             estimate=estimate,
