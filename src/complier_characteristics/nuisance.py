@@ -3,7 +3,7 @@
 The package keeps nuisance estimation intentionally lightweight:
 
 - constant models are available for intercept-only designs
-- logistic regression is delegated to statsmodels' binomial GLM
+- logit and probit regression are delegated to statsmodels' binomial GLM
 
 These routines are deliberately transparent rather than feature-rich.
 """
@@ -13,6 +13,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 from statsmodels.genmod.families import Binomial
+from statsmodels.genmod.families.links import Logit, Probit
 from statsmodels.genmod.generalized_linear_model import GLM
 
 from .data import ComplierDataset
@@ -47,8 +48,60 @@ def fit_logistic_regression(
 ) -> NDArray[np.float64]:
     """Fit logistic regression with statsmodels and return clipped probabilities."""
 
+    return fit_binary_response_regression(
+        features,
+        target,
+        link="logit",
+        prediction_features=prediction_features,
+        ridge=ridge,
+        max_iter=max_iter,
+        tol=tol,
+        clip=clip,
+    )
+
+
+def fit_probit_regression(
+    features: NDArray[np.float64],
+    target: NDArray[np.float64],
+    *,
+    prediction_features: NDArray[np.float64] | None = None,
+    ridge: float = 1e-6,
+    max_iter: int = 200,
+    tol: float = 1e-8,
+    clip: float = 1e-6,
+) -> NDArray[np.float64]:
+    """Fit probit regression with statsmodels and return clipped probabilities."""
+
+    return fit_binary_response_regression(
+        features,
+        target,
+        link="probit",
+        prediction_features=prediction_features,
+        ridge=ridge,
+        max_iter=max_iter,
+        tol=tol,
+        clip=clip,
+    )
+
+
+def fit_binary_response_regression(
+    features: NDArray[np.float64],
+    target: NDArray[np.float64],
+    *,
+    link: str,
+    prediction_features: NDArray[np.float64] | None = None,
+    ridge: float = 1e-6,
+    max_iter: int = 200,
+    tol: float = 1e-8,
+    clip: float = 1e-6,
+) -> NDArray[np.float64]:
+    """Fit a statsmodels binomial GLM and return clipped probabilities."""
+
     if features.ndim != 2:
         raise ValueError("features must be a two-dimensional matrix.")
+
+    if link not in {"logit", "probit"}:
+        raise ValueError(f"Unsupported binary response link {link!r}.")
 
     prediction_matrix = features if prediction_features is None else prediction_features
     if prediction_matrix.ndim != 2:
@@ -60,7 +113,8 @@ def fit_logistic_regression(
 
     design = add_intercept(features)
     prediction_design = add_intercept(prediction_matrix)
-    model = GLM(target, design, family=Binomial())
+    family = Binomial(link=Logit() if link == "logit" else Probit())
+    model = GLM(target, design, family=family)
 
     if ridge > 0.0:
         alpha = np.full(design.shape[1], ridge, dtype=float)
@@ -85,9 +139,9 @@ def estimate_propensity_scores(
     covariate_names: list[str] | None = None,
     clip: float = 1e-6,
 ) -> NDArray[np.float64]:
-    """Estimate `P(Z=1 | X)` under a simple constant or logit model."""
+    """Estimate `P(Z=1 | X)` under a constant, logit, or probit model."""
 
-    if model not in {"constant", "logit"}:
+    if model not in {"constant", "logit", "probit"}:
         raise ValueError(f"Unsupported propensity model {model!r}.")
 
     if model == "constant":
@@ -99,7 +153,12 @@ def estimate_propensity_scores(
         probability = float(np.clip(dataset.instrument.mean(), clip, 1.0 - clip))
         return np.full(dataset.n_obs, probability, dtype=float)
 
-    return fit_logistic_regression(features, dataset.instrument, clip=clip)
+    return fit_binary_response_regression(
+        features,
+        dataset.instrument,
+        link=model,
+        clip=clip,
+    )
 
 
 def estimate_treatment_responses(
@@ -115,7 +174,7 @@ def estimate_treatment_responses(
     observation under each instrument state.
     """
 
-    if model not in {"constant", "logit"}:
+    if model not in {"constant", "logit", "probit"}:
         raise ValueError(f"Unsupported treatment model {model!r}.")
 
     features = dataset.covariate_matrix(covariate_names)
@@ -130,9 +189,10 @@ def estimate_treatment_responses(
             probability = float(np.clip(d[mask].mean(), clip, 1.0 - clip))
             return np.full(dataset.n_obs, probability, dtype=float)
 
-        return fit_logistic_regression(
+        return fit_binary_response_regression(
             features[mask],
             d[mask],
+            link=model,
             prediction_features=features,
             clip=clip,
         )

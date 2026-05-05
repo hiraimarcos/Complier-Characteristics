@@ -123,10 +123,14 @@ Supported nuisance strategies:
   uses the sample instrument rate
 - `propensity_model="logit"`:
   fits a statsmodels logistic regression on the supplied covariates
+- `propensity_model="probit"`:
+  fits a statsmodels probit regression on the supplied covariates
 - `treatment_model="constant"`:
   uses within-instrument sample means for `E[D | Z=z, X]`
 - `treatment_model="logit"`:
   fits separate statsmodels logistic regressions in the `Z=0` and `Z=1` strata
+- `treatment_model="probit"`:
+  fits separate statsmodels probit regressions in the `Z=0` and `Z=1` strata
 
 The default is deliberately conservative:
 
@@ -186,7 +190,7 @@ easy to see.
 - binary-IV identification logic
 - Abadie-style `kappa` weights
 - a readable doubly robust score for average complier characteristics
-- simple nuisance estimation with intercept-only or logit models
+- simple nuisance estimation with intercept-only, logit, or probit models
 - helpers for means, variances, subgroup shares, and empirical CDFs
 - unit tests based on simulated data with known complier populations
 

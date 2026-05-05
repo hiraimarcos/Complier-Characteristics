@@ -30,11 +30,11 @@ class ComplierEstimator:
         recent weighting literature.
     propensity_model:
         Strategy used when propensity scores are not supplied explicitly.
-        Supported values are `"constant"` and `"logit"`.
+        Supported values are `"constant"`, `"logit"`, and `"probit"`.
     treatment_model:
         Strategy used by the doubly robust backend when treatment regressions
-        are not supplied explicitly. Supported values are `"constant"` and
-        `"logit"`.
+        are not supplied explicitly. Supported values are `"constant"`,
+        `"logit"`, and `"probit"`.
     covariate_names:
         Optional subset of covariates to use in nuisance estimation.
     clip:
