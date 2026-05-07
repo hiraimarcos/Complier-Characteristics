@@ -145,12 +145,17 @@ Supported nuisance strategies:
 
 - `propensity_model="constant"`:
   uses the sample instrument rate
+- `propensity_model="linear"`:
+  fits a clipped OLS linear probability model on the supplied covariates
 - `propensity_model="logit"`:
   fits a statsmodels logistic regression on the supplied covariates
 - `propensity_model="probit"`:
   fits a statsmodels probit regression on the supplied covariates
 - `treatment_model="constant"`:
   uses within-instrument sample means for `E[D | Z=z, X]`
+- `treatment_model="linear"`:
+  fits separate clipped OLS linear probability models in the `Z=0` and `Z=1`
+  strata
 - `treatment_model="logit"`:
   fits separate statsmodels logistic regressions in the `Z=0` and `Z=1` strata
 - `treatment_model="probit"`:
@@ -166,7 +171,7 @@ Abadie-style weights numerically unstable:
 ```python
 plugin_result = ComplierEstimator(
     backend="plugin",
-    treatment_model="logit",
+    treatment_model="linear",
     covariate_names=["x"],
 ).fit(dataset)
 ```
@@ -284,7 +289,8 @@ easy to see.
 - Abadie-style `kappa` weights
 - first-stage plug-in scores for average complier characteristics
 - a readable doubly robust score for average complier characteristics
-- simple nuisance estimation with intercept-only, logit, or probit models
+- simple nuisance estimation with intercept-only, clipped OLS linear
+  probability, logit, or probit models
 - helpers for means, variances, subgroup shares, and empirical CDFs
 - IPW and doubly robust estimators for the average effect of instrument
   assignment

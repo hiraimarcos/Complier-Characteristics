@@ -43,13 +43,14 @@ class ComplierEstimator:
         recent weighting literature.
     propensity_model:
         Strategy used when propensity scores are not supplied explicitly.
-        Supported values are `"constant"`, `"logit"`, and `"probit"`.
+        Supported values are `"constant"`, `"linear"`, `"logit"`, and
+        `"probit"`.
         The `"plugin"` backend does not estimate propensities unless
         `propensity_scores` are supplied for post-fit IPW-only methods.
     treatment_model:
         Strategy used by the plug-in and doubly robust backends when treatment
         regressions are not supplied explicitly. Supported values are
-        `"constant"`, `"logit"`, and `"probit"`.
+        `"constant"`, `"linear"`, `"logit"`, and `"probit"`.
     assignment_outcome_model:
         Strategy used by doubly robust assignment ATE estimation when outcome
         regressions are not supplied explicitly. Supported values are

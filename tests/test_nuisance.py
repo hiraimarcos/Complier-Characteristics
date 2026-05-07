@@ -20,6 +20,7 @@ from complier_characteristics.nuisance import (
     estimate_propensity_scores,
     estimate_treatment_responses,
     expit,
+    fit_linear_probability_model,
     fit_linear_regression,
     fit_logistic_regression,
     fit_probit_regression,
@@ -76,6 +77,20 @@ class LinkAndRegressionTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "two-dimensional"):
             fit_linear_regression(np.array([0.0, 1.0, 2.0]), np.array([1.0, 3.0, 5.0]))
+
+    def test_linear_probability_model_clips_ols_predictions(self) -> None:
+        predictions = fit_linear_probability_model(
+            np.array([[-10.0], [0.0], [10.0]]),
+            np.array([0.0, 1.0, 1.0]),
+            prediction_features=np.array([[-100.0], [0.0], [100.0]]),
+            clip=0.1,
+        )
+
+        self.assertEqual(predictions.shape, (3,))
+        self.assertTrue(np.all(predictions >= 0.1))
+        self.assertTrue(np.all(predictions <= 0.9))
+        self.assertAlmostEqual(predictions[0], 0.1)
+        self.assertAlmostEqual(predictions[-1], 0.9)
 
 
 class NuisanceEstimatorTests(unittest.TestCase):
@@ -148,6 +163,34 @@ class NuisanceEstimatorTests(unittest.TestCase):
             self.assertEqual(predictions.shape, (dataset.n_obs,))
             self.assertTrue(np.all(predictions >= 0.01))
             self.assertTrue(np.all(predictions <= 0.99))
+
+    def test_linear_probability_models_estimate_propensity_and_treatment_responses(self) -> None:
+        dataset = ComplierDataset.from_arrays(
+            instrument=[0, 0, 0, 1, 1, 1],
+            treatment=[0, 0, 1, 0, 1, 1],
+            covariates={"x": [-2.0, 0.0, 2.0, -2.0, 0.0, 2.0]},
+        )
+
+        propensities = estimate_propensity_scores(
+            dataset,
+            model="linear",
+            covariate_names=["x"],
+            clip=0.05,
+        )
+        treated_if_z0, treated_if_z1 = estimate_treatment_responses(
+            dataset,
+            model="linear",
+            covariate_names=["x"],
+            clip=0.05,
+        )
+
+        for predictions in (propensities, treated_if_z0, treated_if_z1):
+            self.assertEqual(predictions.shape, (dataset.n_obs,))
+            self.assertTrue(np.all(predictions >= 0.05))
+            self.assertTrue(np.all(predictions <= 0.95))
+
+        self.assertGreater(treated_if_z0[-1], treated_if_z0[0])
+        self.assertGreater(treated_if_z1[-1], treated_if_z1[0])
 
     def test_nuisance_estimators_reject_unknown_models_and_missing_strata(self) -> None:
         dataset = ComplierDataset.from_arrays(

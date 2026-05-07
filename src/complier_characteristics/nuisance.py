@@ -4,7 +4,7 @@ The package keeps nuisance estimation intentionally lightweight:
 
 - constant models are available for intercept-only designs
 - logit and probit regression are delegated to statsmodels' binomial GLM
-- linear outcome regression uses ordinary least squares
+- linear probability and outcome regression use ordinary least squares
 
 These routines are deliberately transparent rather than feature-rich.
 """
@@ -158,6 +158,23 @@ def fit_linear_regression(
     return np.asarray(prediction_design @ coefficients, dtype=float)
 
 
+def fit_linear_probability_model(
+    features: NDArray[np.float64],
+    target: NDArray[np.float64],
+    *,
+    prediction_features: NDArray[np.float64] | None = None,
+    clip: float = 1e-6,
+) -> NDArray[np.float64]:
+    """Fit an OLS linear probability model and return clipped predictions."""
+
+    predictions = fit_linear_regression(
+        features,
+        target,
+        prediction_features=prediction_features,
+    )
+    return np.clip(predictions, clip, 1.0 - clip)
+
+
 def estimate_propensity_scores(
     dataset: ComplierDataset,
     *,
@@ -165,9 +182,9 @@ def estimate_propensity_scores(
     covariate_names: list[str] | None = None,
     clip: float = 1e-6,
 ) -> NDArray[np.float64]:
-    """Estimate `P(Z=1 | X)` under a constant, logit, or probit model."""
+    """Estimate `P(Z=1 | X)` under a constant, linear, logit, or probit model."""
 
-    if model not in {"constant", "logit", "probit"}:
+    if model not in {"constant", "linear", "logit", "probit"}:
         raise ValueError(f"Unsupported propensity model {model!r}.")
 
     if model == "constant":
@@ -178,6 +195,9 @@ def estimate_propensity_scores(
     if features.shape[1] == 0:
         probability = float(np.clip(dataset.instrument.mean(), clip, 1.0 - clip))
         return np.full(dataset.n_obs, probability, dtype=float)
+
+    if model == "linear":
+        return fit_linear_probability_model(features, dataset.instrument, clip=clip)
 
     return fit_binary_response_regression(
         features,
@@ -200,7 +220,7 @@ def estimate_treatment_responses(
     observation under each instrument state.
     """
 
-    if model not in {"constant", "logit", "probit"}:
+    if model not in {"constant", "linear", "logit", "probit"}:
         raise ValueError(f"Unsupported treatment model {model!r}.")
 
     features = dataset.covariate_matrix(covariate_names)
@@ -214,6 +234,14 @@ def estimate_treatment_responses(
         if model == "constant" or features.shape[1] == 0:
             probability = float(np.clip(d[mask].mean(), clip, 1.0 - clip))
             return np.full(dataset.n_obs, probability, dtype=float)
+
+        if model == "linear":
+            return fit_linear_probability_model(
+                features[mask],
+                d[mask],
+                prediction_features=features,
+                clip=clip,
+            )
 
         return fit_binary_response_regression(
             features[mask],

@@ -37,12 +37,12 @@ def estimate_complier_means_from_dataframe(
     after the complete-case filter below. ``clip`` bounds nuisance probabilities
     away from 0 and 1.
 
-    For ``backend="plugin"``, set ``treatment_model`` to ``"logit"`` or
-    ``"probit"`` and pass ``nuisance_columns`` to estimate covariate-varying
-    first-stage functions ``E[D | Z=z, X]``. If an outcome column is supplied,
-    this helper also estimates and stores instrument propensities so the
-    returned result can still compute IPW-based outcome summaries. Those
-    propensities are not used for the plug-in complier means.
+    For ``backend="plugin"``, set ``treatment_model`` to ``"linear"``,
+    ``"logit"``, or ``"probit"`` and pass ``nuisance_columns`` to estimate
+    covariate-varying first-stage functions ``E[D | Z=z, X]``. If an outcome
+    column is supplied, this helper also estimates and stores instrument
+    propensities so the returned result can still compute IPW-based outcome
+    summaries. Those propensities are not used for the plug-in complier means.
     """
 
     nuisance_columns = nuisance_columns or []
@@ -205,8 +205,8 @@ def main() -> None:
         mean_columns=mean_columns,
         nuisance_columns=nuisance_columns,
         backend="plugin",
-        propensity_model="logit",
-        treatment_model="logit",
+        propensity_model="linear",
+        treatment_model="linear",
     )
 
     if result.dataset.outcome is None:
