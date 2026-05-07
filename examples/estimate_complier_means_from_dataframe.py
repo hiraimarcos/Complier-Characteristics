@@ -149,6 +149,12 @@ def _logistic(values: np.ndarray) -> np.ndarray:
     return 1.0 / (1.0 + np.exp(-values))
 
 
+def _masked_mean(values: np.ndarray, mask: np.ndarray) -> float:
+    if not np.any(mask):
+        return float("nan")
+    return float(values[mask].mean())
+
+
 def main() -> None:
     df = make_example_dataframe()
 
@@ -182,21 +188,35 @@ def main() -> None:
         raise ValueError("The example outcome summary requires an outcome column.")
 
     outcome = result.dataset.outcome
-    treated = result.dataset.treatment.astype(bool)
+    treatment = result.dataset.treatment
+    instrument = result.dataset.instrument
     untreated_mean = result.untreated_outcome_mean()
     treated_mean = result.treated_outcome_mean()
-    outcome_means = pd.DataFrame(
+    outcome_rows = [
+        {
+            "estimand": "Observed E[Y | D = 0]",
+            "estimate": _masked_mean(outcome, treatment == 0.0),
+            "standard_error": np.nan,
+        },
+        {
+            "estimand": "Observed E[Y | D = 1]",
+            "estimate": _masked_mean(outcome, treatment == 1.0),
+            "standard_error": np.nan,
+        },
+    ]
+    for d_value in [0, 1]:
+        for z_value in [0, 1]:
+            mask = (treatment == float(d_value)) & (instrument == float(z_value))
+            outcome_rows.append(
+                {
+                    "estimand": f"Observed E[Y | D = {d_value}, Z = {z_value}]",
+                    "estimate": _masked_mean(outcome, mask),
+                    "standard_error": np.nan,
+                }
+            )
+
+    outcome_rows.extend(
         [
-            {
-                "estimand": "Observed E[Y | D = 0]",
-                "estimate": float(outcome[~treated].mean()),
-                "standard_error": np.nan,
-            },
-            {
-                "estimand": "Observed E[Y | D = 1]",
-                "estimate": float(outcome[treated].mean()),
-                "standard_error": np.nan,
-            },
             {
                 "estimand": "E[Y_0 | D_1 > D_0]",
                 "estimate": untreated_mean.estimate,
@@ -209,6 +229,7 @@ def main() -> None:
             },
         ]
     )
+    outcome_means = pd.DataFrame(outcome_rows)
 
     print("Complier means")
     print(means.round(4).to_string(index=False))
