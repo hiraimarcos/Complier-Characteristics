@@ -191,6 +191,15 @@ class ComplierResult:
     def _resolve(self, feature: FeatureSpec, *, name: str | None = None) -> NDArray[np.float64]:
         return self.dataset.resolve_feature(feature, name=name)
 
+    def _require_propensities(self, method_name: str) -> NDArray[np.float64]:
+        if self.propensities is None:
+            raise ValueError(
+                f"{method_name} requires instrument propensities. "
+                "The plugin backend does not estimate them unless "
+                "propensity_scores are supplied to fit()."
+            )
+        return self.propensities
+
     def _standard_error_for_moment(
         self,
         values: NDArray[np.float64],
@@ -320,7 +329,7 @@ class ComplierResult:
         values = self._resolve(outcome, name=str(label))
         z = self.dataset.instrument
         d = self.dataset.treatment
-        p = self.propensities
+        p = self._require_propensities("potential_outcome_mean()")
 
         if d_value == 1:
             numerator_scores = z * d * values / p - (1.0 - z) * d * values / (1.0 - p)
@@ -395,6 +404,11 @@ class ComplierResult:
           regressions for `E[Y | Z=z, X]`.
         """
 
+        if method not in ASSIGNMENT_ATE_METHODS:
+            raise ValueError(f"Unsupported assignment ATE method {method!r}.")
+
+        p = self._require_propensities("assignment_ate()")
+
         if method == "dr" and outcome_if_z0 is None and outcome_if_z1 is None:
             outcome_if_z0, outcome_if_z1 = estimate_outcome_responses(
                 self.dataset,
@@ -405,7 +419,7 @@ class ComplierResult:
 
         return estimate_assignment_ate(
             self.dataset,
-            self.propensities,
+            p,
             outcome=outcome,
             method=method,
             outcome_if_z0=outcome_if_z0,

@@ -116,5 +116,30 @@ class DoublyRobustBackendTests(unittest.TestCase):
         self.assertGreater(diagnostics["complier_share"], 0.0)
 
 
+class PluginBackendTests(unittest.TestCase):
+    def test_plugin_backend_recovers_complier_profile_without_propensity_scores(self) -> None:
+        dataset, complier = make_dataset(seed=789, n_obs=7000, conditional_instrument=True)
+
+        estimator = ComplierEstimator(
+            backend="plugin",
+            normalize=True,
+            treatment_model="logit",
+            covariate_names=["x"],
+        )
+        result = estimator.fit(dataset)
+
+        true_mean = float(dataset.covariates["x"][complier].mean())
+        true_share = float(dataset.covariates["high_x"][complier].mean())
+
+        self.assertAlmostEqual(result.mean("x").estimate, true_mean, delta=0.10)
+        self.assertAlmostEqual(result.share("high_x").estimate, true_share, delta=0.07)
+
+        diagnostics = result.diagnostics.to_dict()
+        self.assertEqual(diagnostics["backend"], "plugin")
+        self.assertIsNone(diagnostics["min_propensity"])
+        self.assertIsNone(diagnostics["max_propensity"])
+        self.assertGreater(diagnostics["complier_share"], 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

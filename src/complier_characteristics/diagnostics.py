@@ -16,12 +16,12 @@ class ComplierDiagnostics:
     treatment_rate: float
     first_stage: float
     complier_share: float
-    min_propensity: float
-    max_propensity: float
+    min_propensity: float | None
+    max_propensity: float | None
     negative_score_fraction: float
     score_mean: float
 
-    def to_dict(self) -> dict[str, float | int | str | bool]:
+    def to_dict(self) -> dict[str, float | int | str | bool | None]:
         """Return a plain-Python representation for logging or debugging."""
 
         return {

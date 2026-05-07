@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 from complier_characteristics import ComplierDataset, ComplierEstimator, ComplierResult
+from complier_characteristics.nuisance import estimate_propensity_scores
 
 
 def estimate_complier_means_from_dataframe(
@@ -25,13 +26,23 @@ def estimate_complier_means_from_dataframe(
     outcome_col: str | None = None,
     nuisance_columns: list[str] | None = None,
     propensity_model: str = "constant",
+    treatment_model: str = "constant",
     backend: str = "abadie",
+    clip: float = 1e-6,
 ) -> tuple[pd.DataFrame, ComplierResult]:
     """Fit once and estimate complier means for every column in mean_columns.
 
     ``instrument_col`` and ``treatment_col`` must be binary 0/1 columns. All
     ``mean_columns`` and ``nuisance_columns`` must be numeric and non-missing
-    after the complete-case filter below.
+    after the complete-case filter below. ``clip`` bounds nuisance probabilities
+    away from 0 and 1.
+
+    For ``backend="plugin"``, set ``treatment_model`` to ``"logit"`` or
+    ``"probit"`` and pass ``nuisance_columns`` to estimate covariate-varying
+    first-stage functions ``E[D | Z=z, X]``. If an outcome column is supplied,
+    this helper also estimates and stores instrument propensities so the
+    returned result can still compute IPW-based outcome summaries. Those
+    propensities are not used for the plug-in complier means.
     """
 
     nuisance_columns = nuisance_columns or []
@@ -67,9 +78,21 @@ def estimate_complier_means_from_dataframe(
         backend=backend,
         normalize=True,
         propensity_model=propensity_model,
+        treatment_model=treatment_model,
         covariate_names=nuisance_columns or None,
+        clip=clip,
     )
-    result = estimator.fit(dataset)
+
+    propensity_scores = None
+    if backend == "plugin" and outcome_col is not None:
+        propensity_scores = estimate_propensity_scores(
+            dataset,
+            model=propensity_model,
+            covariate_names=nuisance_columns or None,
+            clip=clip,
+        )
+
+    result = estimator.fit(dataset, propensity_scores=propensity_scores)
 
     rows = []
     for column in mean_columns:
@@ -181,7 +204,9 @@ def main() -> None:
         outcome_col="outcome",
         mean_columns=mean_columns,
         nuisance_columns=nuisance_columns,
+        backend="plugin",
         propensity_model="logit",
+        treatment_model="logit",
     )
 
     if result.dataset.outcome is None:

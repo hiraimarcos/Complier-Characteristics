@@ -14,7 +14,11 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from complier_characteristics import ComplierDataset, ComplierEstimator
-from complier_characteristics.estimators import fit_abadie_backend, fit_doubly_robust_backend
+from complier_characteristics.estimators import (
+    fit_abadie_backend,
+    fit_doubly_robust_backend,
+    fit_plugin_backend,
+)
 
 
 def make_fixed_dataset() -> ComplierDataset:
@@ -41,6 +45,86 @@ def make_potential_outcome_dataset() -> ComplierDataset:
         instrument=[0, 1, 0, 1, 0, 1, 0, 1],
         treatment=[0, 0, 0, 1, 0, 1, 1, 1],
         outcome=[1.0, 1.0, 2.0, 5.0, 4.0, 9.0, 7.0, 7.0],
+    )
+
+
+def make_balanced_latent_type_dataset() -> tuple[
+    ComplierDataset,
+    dict[str, float | np.ndarray],
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+]:
+    """Build a finite population where complier estimands are known exactly."""
+
+    # d0, d1, x, high, y0, y1. Each latent unit appears once with Z=0 and once
+    # with Z=1, so p(Z=1) is exactly 0.5 within every latent type.
+    latent_rows = np.array(
+        [
+            [0.0, 1.0, 1.0, 0.0, 2.0, 6.0],
+            [0.0, 1.0, 3.0, 1.0, 5.0, 9.0],
+            [0.0, 1.0, 5.0, 1.0, 6.0, 14.0],
+            [0.0, 0.0, 2.0, 0.0, 4.0, 11.0],
+            [0.0, 0.0, 6.0, 1.0, 8.0, 15.0],
+            [1.0, 1.0, 0.0, 0.0, 1.0, 7.0],
+            [1.0, 1.0, 4.0, 1.0, 3.0, 10.0],
+        ],
+        dtype=float,
+    )
+    d0, d1, x, high, y0, y1 = latent_rows.T
+
+    instrument: list[float] = []
+    treatment: list[float] = []
+    observed_x: list[float] = []
+    observed_high: list[float] = []
+    outcome: list[float] = []
+    treated_if_z0: list[float] = []
+    treated_if_z1: list[float] = []
+
+    for row_d0, row_d1, row_x, row_high, row_y0, row_y1 in latent_rows:
+        for row_z in (0.0, 1.0):
+            row_d = row_d1 if row_z == 1.0 else row_d0
+            instrument.append(row_z)
+            treatment.append(row_d)
+            observed_x.append(row_x)
+            observed_high.append(row_high)
+            outcome.append(row_y1 if row_d == 1.0 else row_y0)
+            treated_if_z0.append(row_d0)
+            treated_if_z1.append(row_d1)
+
+    dataset = ComplierDataset.from_arrays(
+        instrument=instrument,
+        treatment=treatment,
+        outcome=outcome,
+        covariates={
+            "x": observed_x,
+            "high": observed_high,
+        },
+    )
+
+    complier = d1 > d0
+    assigned_outcome = np.where(d1 == 1.0, y1, y0)
+    unassigned_outcome = np.where(d0 == 1.0, y1, y0)
+    expected: dict[str, float | np.ndarray] = {
+        "complier_share": float(complier.mean()),
+        "mean_x": float(x[complier].mean()),
+        "share_high": float(high[complier].mean()),
+        "variance_x": float(np.mean((x[complier] - x[complier].mean()) ** 2)),
+        "cdf_x": np.array([1.0 / 3.0, 2.0 / 3.0, 1.0]),
+        "untreated_mean": float(y0[complier].mean()),
+        "treated_mean": float(y1[complier].mean()),
+        "late": float((y1[complier] - y0[complier]).mean()),
+        "assigned_mean": float(assigned_outcome.mean()),
+        "unassigned_mean": float(unassigned_outcome.mean()),
+        "assignment_ate": float((assigned_outcome - unassigned_outcome).mean()),
+    }
+
+    return (
+        dataset,
+        expected,
+        np.full(dataset.n_obs, 0.5),
+        np.asarray(treated_if_z0, dtype=float),
+        np.asarray(treated_if_z1, dtype=float),
     )
 
 
@@ -86,6 +170,31 @@ class BackendScoreTests(unittest.TestCase):
         np.testing.assert_allclose(backend_result.treated_if_z0, treated_if_z0)
         np.testing.assert_allclose(backend_result.treated_if_z1, treated_if_z1)
         self.assertAlmostEqual(backend_result.complier_share, 0.5)
+
+    def test_plugin_backend_constructs_conditional_first_stage_scores(self) -> None:
+        dataset = make_fixed_dataset()
+        treated_if_z0 = np.array([0.1, 0.1, 0.3, 0.5])
+        treated_if_z1 = np.array([0.1, 0.3, 0.7, 0.9])
+        backend_result = fit_plugin_backend(
+            dataset,
+            treated_if_z0=treated_if_z0,
+            treated_if_z1=treated_if_z1,
+            normalize=True,
+        )
+
+        expected_raw_scores = np.array([0.0, 0.2, 0.4, 0.4])
+        np.testing.assert_allclose(backend_result.raw_scores, expected_raw_scores)
+        np.testing.assert_allclose(backend_result.scaled_scores, expected_raw_scores / 0.25)
+        np.testing.assert_allclose(backend_result.treated_if_z0, treated_if_z0)
+        np.testing.assert_allclose(backend_result.treated_if_z1, treated_if_z1)
+        self.assertIsNone(backend_result.propensities)
+        self.assertAlmostEqual(backend_result.complier_share, 0.25)
+
+        diagnostics = backend_result.diagnostics.to_dict()
+        self.assertEqual(diagnostics["backend"], "plugin")
+        self.assertIsNone(diagnostics["min_propensity"])
+        self.assertIsNone(diagnostics["max_propensity"])
+        self.assertAlmostEqual(diagnostics["negative_score_fraction"], 0.0)
 
     def test_zero_complier_share_raises(self) -> None:
         dataset = ComplierDataset.from_arrays(
@@ -303,6 +412,162 @@ class ResultFunctionalTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "treatment_value must be 0 or 1"):
             result.potential_outcome_mean(2, [1.0, 2.0, 3.0, 4.0])
 
+    def test_plugin_result_moments_work_without_propensities(self) -> None:
+        dataset = make_fixed_dataset()
+        result = ComplierEstimator(backend="plugin").fit(
+            dataset,
+            treated_if_z0=np.array([0.1, 0.1, 0.3, 0.5]),
+            treated_if_z1=np.array([0.1, 0.3, 0.7, 0.9]),
+        )
+
+        self.assertEqual(result.backend, "plugin")
+        self.assertIsNone(result.propensities)
+        self.assertAlmostEqual(result.mean("x").estimate, 32.0)
+        self.assertAlmostEqual(result.share("high").estimate, 0.6)
+
+        with self.assertRaisesRegex(ValueError, "requires instrument propensities"):
+            result.assignment_ate([1.0, 2.0, 3.0, 4.0])
+
+        with self.assertRaisesRegex(ValueError, "requires instrument propensities"):
+            result.potential_outcome_mean(0, [1.0, 2.0, 3.0, 4.0])
+
+    def test_plugin_result_uses_supplied_propensities_for_ipw_only_methods(self) -> None:
+        dataset = make_assignment_dataset()
+        result = ComplierEstimator(backend="plugin").fit(
+            dataset,
+            propensity_scores=np.full(dataset.n_obs, 0.5),
+            treated_if_z0=np.zeros(dataset.n_obs),
+            treated_if_z1=np.full(dataset.n_obs, 0.5),
+        )
+
+        estimate = result.assignment_ate()
+
+        np.testing.assert_allclose(result.propensities, np.full(dataset.n_obs, 0.5))
+        self.assertAlmostEqual(estimate.assigned_mean, 9.0)
+        self.assertAlmostEqual(estimate.unassigned_mean, 3.0)
+        self.assertAlmostEqual(estimate.estimate, 6.0)
+
+
+class SyntheticApiPointEstimateTests(unittest.TestCase):
+    def assert_result_matches_known_estimands(
+        self,
+        result,
+        expected: dict[str, float | np.ndarray],
+    ) -> None:
+        self.assertAlmostEqual(
+            result.complier_share,
+            float(expected["complier_share"]),
+            places=12,
+        )
+        self.assertAlmostEqual(
+            result.diagnostics.first_stage,
+            float(expected["complier_share"]),
+            places=12,
+        )
+
+        mean_x = result.mean("x")
+        share_high = result.share("high")
+        variance_x = result.variance("x")
+        cdf_x = result.cdf("x", grid=[2.0, 4.0, 6.0])
+        summary = result.summarize_covariates(["x", "high"])
+
+        self.assertAlmostEqual(mean_x.estimate, float(expected["mean_x"]), places=12)
+        self.assertAlmostEqual(share_high.estimate, float(expected["share_high"]), places=12)
+        self.assertAlmostEqual(variance_x.estimate, float(expected["variance_x"]), places=12)
+        np.testing.assert_allclose(cdf_x.values, expected["cdf_x"], atol=1e-12)
+        self.assertAlmostEqual(summary["x"]["mean"], float(expected["mean_x"]), places=12)
+        self.assertAlmostEqual(summary["high"]["share"], float(expected["share_high"]), places=12)
+
+        untreated = result.untreated_outcome_mean()
+        treated = result.treated_outcome_mean()
+        self.assertAlmostEqual(
+            untreated.estimate,
+            float(expected["untreated_mean"]),
+            places=12,
+        )
+        self.assertAlmostEqual(treated.estimate, float(expected["treated_mean"]), places=12)
+        self.assertAlmostEqual(
+            treated.estimate - untreated.estimate,
+            float(expected["late"]),
+            places=12,
+        )
+
+        assignment_ipw = result.assignment_ate(method="ipw")
+        assignment_dr = result.assignment_ate(method="dr")
+        for estimate in (assignment_ipw, assignment_dr):
+            self.assertAlmostEqual(
+                estimate.assigned_mean,
+                float(expected["assigned_mean"]),
+                places=12,
+            )
+            self.assertAlmostEqual(
+                estimate.unassigned_mean,
+                float(expected["unassigned_mean"]),
+                places=12,
+            )
+            self.assertAlmostEqual(
+                estimate.estimate,
+                float(expected["assignment_ate"]),
+                places=12,
+            )
+
+    def test_fitted_backends_recover_known_synthetic_point_estimates(self) -> None:
+        dataset, expected, propensities, treated_if_z0, treated_if_z1 = (
+            make_balanced_latent_type_dataset()
+        )
+        fitted_results = {
+            "abadie": ComplierEstimator(
+                backend="abadie",
+                propensity_model="constant",
+                clip=0.0,
+            ).fit(dataset),
+            "plugin": ComplierEstimator(
+                backend="plugin",
+                clip=0.0,
+            ).fit(
+                dataset,
+                propensity_scores=propensities,
+                treated_if_z0=treated_if_z0,
+                treated_if_z1=treated_if_z1,
+            ),
+            "dr": ComplierEstimator(
+                backend="dr",
+                clip=0.0,
+            ).fit(
+                dataset,
+                propensity_scores=propensities,
+                treated_if_z0=treated_if_z0,
+                treated_if_z1=treated_if_z1,
+            ),
+        }
+
+        for backend, result in fitted_results.items():
+            with self.subTest(backend=backend):
+                self.assert_result_matches_known_estimands(result, expected)
+
+    def test_direct_assignment_ate_api_recovers_known_synthetic_point_estimates(self) -> None:
+        dataset, expected, _, _, _ = make_balanced_latent_type_dataset()
+        estimator = ComplierEstimator(propensity_model="constant")
+
+        for method in ("ipw", "dr"):
+            with self.subTest(method=method):
+                estimate = estimator.assignment_ate(dataset, method=method)
+                self.assertAlmostEqual(
+                    estimate.assigned_mean,
+                    float(expected["assigned_mean"]),
+                    places=12,
+                )
+                self.assertAlmostEqual(
+                    estimate.unassigned_mean,
+                    float(expected["unassigned_mean"]),
+                    places=12,
+                )
+                self.assertAlmostEqual(
+                    estimate.estimate,
+                    float(expected["assignment_ate"]),
+                    places=12,
+                )
+
 
 class EstimatorApiTests(unittest.TestCase):
     def test_assignment_ate_on_estimator_does_not_require_first_stage(self) -> None:
@@ -355,6 +620,12 @@ class EstimatorApiTests(unittest.TestCase):
             ComplierEstimator(backend="dr").fit(
                 dataset,
                 propensity_scores=np.full(dataset.n_obs, 0.5),
+                treated_if_z0=np.zeros(dataset.n_obs),
+            )
+
+        with self.assertRaisesRegex(ValueError, "must be supplied together"):
+            ComplierEstimator(backend="plugin").fit(
+                dataset,
                 treated_if_z0=np.zeros(dataset.n_obs),
             )
 

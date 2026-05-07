@@ -10,6 +10,8 @@ The first version is intentionally narrow and readable:
 - binary treatment `D`
 - user-supplied feature maps `f(X)`
 - Abadie-style `kappa` weighting as the default backend
+- a first-stage plug-in backend that avoids division by instrument
+  propensities for average complier characteristics
 - an optional doubly robust backend for average complier characteristics
 - helpers for means, variances, subgroup shares, and empirical CDFs
 - IPW estimators for `E[Y_0 | D_1 > D_0]` and `E[Y_1 | D_1 > D_0]`
@@ -40,9 +42,12 @@ The resulting design choices are:
 
 1. treat complier moments as the primitive target
 2. use Abadie's `kappa` representation as the default estimator
-3. keep nuisance estimation modular so covariate-adjusted and doubly robust
+3. include the first-stage plug-in representation
+   `E[D | Z=1, X] - E[D | Z=0, X]` as a propensity-free alternative for
+   average complier characteristics
+4. keep nuisance estimation modular so covariate-adjusted and doubly robust
    estimators can reuse the same high-level API
-4. include diagnostics because weight normalization and weak first stages are
+5. include diagnostics because weight normalization and weak first stages are
    implementation issues, not afterthoughts
 
 ## Installation
@@ -128,6 +133,10 @@ Supported backends:
 - `backend="abadie"`:
   computes Abadie-style `kappa` scores and uses them as complier-membership
   weights
+- `backend="plugin"`:
+  computes first-stage plug-in scores
+  `E[D | Z=1, X] - E[D | Z=0, X]`; this avoids inverse-propensity division but
+  relies on the treatment-response regressions
 - `backend="dr"`:
   computes an augmented score for average complier characteristics using
   estimated nuisance functions for `P(Z=1 | X)` and `E[D | Z=z, X]`
@@ -150,6 +159,27 @@ Supported nuisance strategies:
   uses within-instrument sample means for `E[Y | Z=z, X]`
 - `assignment_outcome_model="linear"`:
   fits separate least squares regressions in the `Z=0` and `Z=1` strata
+
+The plug-in backend is useful when extreme values of `P(Z=1 | X)` make
+Abadie-style weights numerically unstable:
+
+```python
+plugin_result = ComplierEstimator(
+    backend="plugin",
+    treatment_model="logit",
+    covariate_names=["x"],
+).fit(dataset)
+```
+
+This backend estimates average complier characteristics as
+
+```text
+E[f(X) | complier]
+  = E[f(X) {m1(X) - m0(X)}] / E[m1(X) - m0(X)]
+```
+
+where `m1(X) = E[D | Z=1, X]` and `m0(X) = E[D | Z=0, X]`. It does not estimate
+instrument propensities unless `propensity_scores` are supplied to `fit()`.
 
 The default is deliberately conservative:
 
@@ -212,7 +242,10 @@ result.assignment_ate(method="dr")
 `untreated_outcome_mean` estimates `E[Y_0 | D_1 > D_0]`, and
 `treated_outcome_mean` estimates `E[Y_1 | D_1 > D_0]`. These methods use
 inverse-assignment weighted contrasts of observed untreated or treated outcomes
-and accept the same outcome feature inputs as `assignment_ate`.
+and accept the same outcome feature inputs as `assignment_ate`. If the fitted
+object came from `backend="plugin"`, these post-fit outcome methods require
+explicit `propensity_scores` at fit time because the plug-in backend does not
+estimate instrument propensities.
 
 `assignment_ate` estimates the average effect of instrument assignment `Z` on an
 outcome using propensity scores `P(Z=1 | X)`. The default outcome is the
@@ -237,7 +270,7 @@ Every fit returns a `ComplierDiagnostics` object with:
 - treatment rate
 - first-stage difference in treatment rates
 - estimated complier share
-- min and max instrument propensities
+- min and max instrument propensities when the fit used propensities
 - fraction of negative raw scores
 - whether normalized weights were used
 
@@ -249,6 +282,7 @@ easy to see.
 
 - binary-IV identification logic
 - Abadie-style `kappa` weights
+- first-stage plug-in scores for average complier characteristics
 - a readable doubly robust score for average complier characteristics
 - simple nuisance estimation with intercept-only, logit, or probit models
 - helpers for means, variances, subgroup shares, and empirical CDFs
@@ -287,7 +321,10 @@ src/complier_characteristics/
     nuisance.py
     results.py
 tests/
+    test_api_results.py
+    test_data.py
     test_estimators.py
+    test_nuisance.py
 ```
 
 ## Reading Guide for the Code

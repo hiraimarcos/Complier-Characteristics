@@ -8,7 +8,11 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from .data import ComplierDataset, FeatureSpec
-from .estimators import fit_abadie_backend, fit_doubly_robust_backend
+from .estimators import (
+    fit_abadie_backend,
+    fit_doubly_robust_backend,
+    fit_plugin_backend,
+)
 from .nuisance import (
     estimate_outcome_responses,
     estimate_propensity_scores,
@@ -29,9 +33,9 @@ class ComplierEstimator:
     Parameters
     ----------
     backend:
-        Either `"abadie"` for the default kappa-weighted estimator or `"dr"`
-        for an augmented doubly robust score for average complier
-        characteristics.
+        Either `"abadie"` for the default kappa-weighted estimator,
+        `"plugin"` for a first-stage plug-in estimator, or `"dr"` for an
+        augmented doubly robust score for average complier characteristics.
     normalize:
         If `True`, rescale the raw scores so their sample mean equals one.
         This leaves ratio estimates unchanged but makes the effective weights
@@ -40,10 +44,12 @@ class ComplierEstimator:
     propensity_model:
         Strategy used when propensity scores are not supplied explicitly.
         Supported values are `"constant"`, `"logit"`, and `"probit"`.
+        The `"plugin"` backend does not estimate propensities unless
+        `propensity_scores` are supplied for post-fit IPW-only methods.
     treatment_model:
-        Strategy used by the doubly robust backend when treatment regressions
-        are not supplied explicitly. Supported values are `"constant"`,
-        `"logit"`, and `"probit"`.
+        Strategy used by the plug-in and doubly robust backends when treatment
+        regressions are not supplied explicitly. Supported values are
+        `"constant"`, `"logit"`, and `"probit"`.
     assignment_outcome_model:
         Strategy used by doubly robust assignment ATE estimation when outcome
         regressions are not supplied explicitly. Supported values are
@@ -118,12 +124,11 @@ class ComplierEstimator:
         - `treated_if_z1`
         """
 
-        if self.backend not in {"abadie", "dr"}:
+        if self.backend not in {"abadie", "plugin", "dr"}:
             raise ValueError(f"Unsupported backend {self.backend!r}.")
 
-        propensities = self._resolve_propensities(dataset, propensity_scores)
-
         if self.backend == "abadie":
+            propensities = self._resolve_propensities(dataset, propensity_scores)
             backend_result = fit_abadie_backend(
                 dataset,
                 propensities=propensities,
@@ -136,6 +141,22 @@ class ComplierEstimator:
             treated_if_z0=treated_if_z0,
             treated_if_z1=treated_if_z1,
         )
+        if self.backend == "plugin":
+            propensities = (
+                self._resolve_propensities(dataset, propensity_scores)
+                if propensity_scores is not None
+                else None
+            )
+            backend_result = fit_plugin_backend(
+                dataset,
+                treated_if_z0=m0,
+                treated_if_z1=m1,
+                normalize=self.normalize,
+                propensities=propensities,
+            )
+            return ComplierResult(dataset, backend_result)
+
+        propensities = self._resolve_propensities(dataset, propensity_scores)
         backend_result = fit_doubly_robust_backend(
             dataset,
             propensities=propensities,
