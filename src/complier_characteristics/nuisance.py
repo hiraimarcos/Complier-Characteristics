@@ -4,6 +4,7 @@ The package keeps nuisance estimation intentionally lightweight:
 
 - constant models are available for intercept-only designs
 - logit and probit regression are delegated to statsmodels' binomial GLM
+- linear outcome regression uses ordinary least squares
 
 These routines are deliberately transparent rather than feature-rich.
 """
@@ -16,7 +17,7 @@ from statsmodels.genmod.families import Binomial
 from statsmodels.genmod.families.links import Logit, Probit
 from statsmodels.genmod.generalized_linear_model import GLM
 
-from .data import ComplierDataset
+from .data import ComplierDataset, FeatureSpec
 
 
 def expit(values: NDArray[np.float64]) -> NDArray[np.float64]:
@@ -132,6 +133,31 @@ def fit_binary_response_regression(
     return np.clip(predictions, clip, 1.0 - clip)
 
 
+def fit_linear_regression(
+    features: NDArray[np.float64],
+    target: NDArray[np.float64],
+    *,
+    prediction_features: NDArray[np.float64] | None = None,
+) -> NDArray[np.float64]:
+    """Fit least squares regression and return predictions."""
+
+    if features.ndim != 2:
+        raise ValueError("features must be a two-dimensional matrix.")
+    if target.ndim != 1:
+        raise ValueError("target must be one-dimensional.")
+    if target.shape[0] != features.shape[0]:
+        raise ValueError("target and features must have the same number of observations.")
+
+    prediction_matrix = features if prediction_features is None else prediction_features
+    if prediction_matrix.ndim != 2:
+        raise ValueError("prediction_features must be a two-dimensional matrix.")
+
+    design = add_intercept(features)
+    prediction_design = add_intercept(prediction_matrix)
+    coefficients, *_ = np.linalg.lstsq(design, target, rcond=None)
+    return np.asarray(prediction_design @ coefficients, dtype=float)
+
+
 def estimate_propensity_scores(
     dataset: ComplierDataset,
     *,
@@ -200,3 +226,45 @@ def estimate_treatment_responses(
     treated_if_z0 = _fit_within_stratum(~z)
     treated_if_z1 = _fit_within_stratum(z)
     return treated_if_z0, treated_if_z1
+
+
+def estimate_outcome_responses(
+    dataset: ComplierDataset,
+    outcome: FeatureSpec = "outcome",
+    *,
+    model: str = "constant",
+    covariate_names: list[str] | None = None,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Estimate `E[Y | Z=0, X]` and `E[Y | Z=1, X]`.
+
+    The returned arrays are predicted potential assignment-state outcomes for
+    every observation under each instrument state.
+    """
+
+    if model not in {"constant", "linear"}:
+        raise ValueError(f"Unsupported outcome model {model!r}.")
+    if isinstance(outcome, str) and outcome == "outcome" and dataset.outcome is None:
+        raise ValueError(
+            "outcome response estimation requires an outcome or an explicit outcome feature."
+        )
+
+    y = dataset.resolve_feature(outcome, name="outcome")
+    features = dataset.covariate_matrix(covariate_names)
+    z = dataset.instrument.astype(bool)
+
+    def _fit_within_stratum(mask: NDArray[np.bool_]) -> NDArray[np.float64]:
+        if not np.any(mask):
+            raise ValueError("Each instrument stratum must contain at least one observation.")
+
+        if model == "constant" or features.shape[1] == 0:
+            return np.full(dataset.n_obs, float(y[mask].mean()), dtype=float)
+
+        return fit_linear_regression(
+            features[mask],
+            y[mask],
+            prediction_features=features,
+        )
+
+    outcome_if_z0 = _fit_within_stratum(~z)
+    outcome_if_z1 = _fit_within_stratum(z)
+    return outcome_if_z0, outcome_if_z1

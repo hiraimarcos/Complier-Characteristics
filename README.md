@@ -12,6 +12,9 @@ The first version is intentionally narrow and readable:
 - Abadie-style `kappa` weighting as the default backend
 - an optional doubly robust backend for average complier characteristics
 - helpers for means, variances, subgroup shares, and empirical CDFs
+- IPW and doubly robust estimators for the average effect of instrument
+  assignment
+- analytical fixed-nuisance standard errors for scalar estimates
 
 The package is designed to make the literature legible in code. Most public IV
 packages focus on treatment effects. This one focuses on the latent complier
@@ -62,10 +65,12 @@ x = rng.normal(size=n)
 z = rng.binomial(1, 0.5, size=n)
 complier = rng.binomial(1, 1 / (1 + np.exp(-(0.2 + 0.8 * x))), size=n)
 d = z * complier
+y = 1.0 + 0.2 * z + 0.5 * x + rng.normal(scale=0.25, size=n)
 
 dataset = ComplierDataset.from_arrays(
     instrument=z,
     treatment=d,
+    outcome=y,
     covariates={
         "x": x,
         "high_x": (x > 0).astype(float),
@@ -82,10 +87,15 @@ result = estimator.fit(dataset)
 mean_x = result.mean("x")
 share_high_x = result.share("high_x")
 cdf_x = result.cdf("x", grid=np.linspace(-2.0, 2.0, 5))
+assignment_effect = result.assignment_ate(method="ipw")
 
 print(mean_x.estimate)
+print(mean_x.standard_error)
 print(share_high_x.estimate)
 print(cdf_x.values)
+print(cdf_x.standard_errors)
+print(assignment_effect.estimate)
+print(assignment_effect.standard_error)
 print(result.diagnostics.to_dict())
 ```
 
@@ -131,6 +141,10 @@ Supported nuisance strategies:
   fits separate statsmodels logistic regressions in the `Z=0` and `Z=1` strata
 - `treatment_model="probit"`:
   fits separate statsmodels probit regressions in the `Z=0` and `Z=1` strata
+- `assignment_outcome_model="constant"`:
+  uses within-instrument sample means for `E[Y | Z=z, X]`
+- `assignment_outcome_model="linear"`:
+  fits separate least squares regressions in the `Z=0` and `Z=1` strata
 
 The default is deliberately conservative:
 
@@ -140,8 +154,20 @@ ComplierEstimator(
     normalize=True,
     propensity_model="constant",
     treatment_model="constant",
+    assignment_outcome_model="constant",
 )
 ```
+
+The same estimator can compute assignment effects directly:
+
+```python
+assignment_effect = estimator.assignment_ate(dataset, method="ipw")
+assignment_effect_dr = estimator.assignment_ate(dataset, method="dr")
+```
+
+This direct path does not require a nonzero first stage for realized treatment
+take-up. The doubly robust method uses both `P(Z=1 | X)` and outcome
+regressions for `E[Y | Z=z, X]`.
 
 ## Estimands Exposed by `ComplierResult`
 
@@ -152,6 +178,8 @@ The fitted result object exposes common descriptive functionals:
 - `share(feature)`
 - `cdf(feature, grid)`
 - `moment(feature)`
+- `assignment_ate(outcome="outcome", method="ipw")`
+- `assignment_ate(outcome="outcome", method="dr")`
 - `summarize_covariates(names=None)`
 
 Feature inputs can be:
@@ -166,7 +194,23 @@ Examples:
 result.mean("x")
 result.share(lambda data: data.covariates["x"] > 0)
 result.mean(np.square(dataset.covariates["x"]))
+result.assignment_ate(method="ipw")
+result.assignment_ate(method="dr")
 ```
+
+`assignment_ate` estimates the average effect of instrument assignment `Z` on an
+outcome using propensity scores `P(Z=1 | X)`. The default outcome is the
+optional `outcome` stored on `ComplierDataset`, and explicit one-dimensional
+outcome arrays or feature maps are also accepted. The `dr` method augments IPW
+with outcome regressions; by default it uses constant within-instrument outcome
+means, and it can also use `outcome_model="linear"` or externally supplied
+`outcome_if_z0` and `outcome_if_z1` arrays.
+
+Scalar estimates include `standard_error`, computed from the analytical
+influence function while treating fitted nuisance quantities as fixed. For
+complier moments, this uses the ratio influence form. For assignment ATEs, this
+uses the IPW or doubly robust observation-level score. Empirical CDF results
+include pointwise `standard_errors`.
 
 ## Diagnostics
 
@@ -192,16 +236,19 @@ easy to see.
 - a readable doubly robust score for average complier characteristics
 - simple nuisance estimation with intercept-only, logit, or probit models
 - helpers for means, variances, subgroup shares, and empirical CDFs
+- IPW and doubly robust estimators for the average effect of instrument
+  assignment
+- analytical fixed-nuisance standard errors for scalar estimates
 - unit tests based on simulated data with known complier populations
 
 ## What Is Not Implemented Yet
 
-- standard errors or bootstrap inference
+- bootstrap inference
+- nuisance-estimation uncertainty in analytical standard errors
 - cross-fitting
 - multiple instruments
 - multi-valued treatments
 - defiers or monotonicity violations
-- treatment-effect functionals that depend on post-treatment outcomes
 
 Those are natural next steps, but they would make the first version much harder
 to read.

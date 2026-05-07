@@ -7,10 +7,19 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import ArrayLike
 
-from .data import ComplierDataset
+from .data import ComplierDataset, FeatureSpec
 from .estimators import fit_abadie_backend, fit_doubly_robust_backend
-from .nuisance import estimate_propensity_scores, estimate_treatment_responses
-from .results import ComplierResult
+from .nuisance import (
+    estimate_outcome_responses,
+    estimate_propensity_scores,
+    estimate_treatment_responses,
+)
+from .results import (
+    ASSIGNMENT_ATE_METHODS,
+    AssignmentEffectEstimate,
+    ComplierResult,
+    estimate_assignment_ate,
+)
 
 
 @dataclass
@@ -35,6 +44,10 @@ class ComplierEstimator:
         Strategy used by the doubly robust backend when treatment regressions
         are not supplied explicitly. Supported values are `"constant"`,
         `"logit"`, and `"probit"`.
+    assignment_outcome_model:
+        Strategy used by doubly robust assignment ATE estimation when outcome
+        regressions are not supplied explicitly. Supported values are
+        `"constant"` and `"linear"`.
     covariate_names:
         Optional subset of covariates to use in nuisance estimation.
     clip:
@@ -45,8 +58,47 @@ class ComplierEstimator:
     normalize: bool = True
     propensity_model: str = "constant"
     treatment_model: str = "constant"
+    assignment_outcome_model: str = "constant"
     covariate_names: list[str] | None = None
     clip: float = 1e-6
+
+    def assignment_ate(
+        self,
+        dataset: ComplierDataset,
+        *,
+        outcome: FeatureSpec = "outcome",
+        method: str = "ipw",
+        propensity_scores: ArrayLike | None = None,
+        outcome_if_z0: ArrayLike | None = None,
+        outcome_if_z1: ArrayLike | None = None,
+        name: str | None = None,
+    ) -> AssignmentEffectEstimate:
+        """Estimate the average effect of instrument assignment on an outcome.
+
+        This path does not use treatment take-up scores, so it does not require
+        a valid first stage for treatment take-up.
+        """
+
+        if method not in ASSIGNMENT_ATE_METHODS:
+            raise ValueError(f"Unsupported assignment ATE method {method!r}.")
+
+        propensities = self._resolve_propensities(dataset, propensity_scores)
+        if method == "dr":
+            outcome_if_z0, outcome_if_z1 = self._resolve_assignment_outcome_regressions(
+                dataset,
+                outcome=outcome,
+                outcome_if_z0=outcome_if_z0,
+                outcome_if_z1=outcome_if_z1,
+            )
+        return estimate_assignment_ate(
+            dataset,
+            propensities,
+            outcome=outcome,
+            method=method,
+            outcome_if_z0=outcome_if_z0,
+            outcome_if_z1=outcome_if_z1,
+            name=name,
+        )
 
     def fit(
         self,
@@ -129,4 +181,27 @@ class ComplierEstimator:
             model=self.treatment_model,
             covariate_names=self.covariate_names,
             clip=self.clip,
+        )
+
+    def _resolve_assignment_outcome_regressions(
+        self,
+        dataset: ComplierDataset,
+        *,
+        outcome: FeatureSpec,
+        outcome_if_z0: ArrayLike | None,
+        outcome_if_z1: ArrayLike | None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        if (outcome_if_z0 is None) != (outcome_if_z1 is None):
+            raise ValueError("outcome_if_z0 and outcome_if_z1 must be supplied together.")
+
+        if outcome_if_z0 is not None and outcome_if_z1 is not None:
+            y0 = dataset.resolve_feature(outcome_if_z0, name="outcome_if_z0")
+            y1 = dataset.resolve_feature(outcome_if_z1, name="outcome_if_z1")
+            return y0, y1
+
+        return estimate_outcome_responses(
+            dataset,
+            outcome=outcome,
+            model=self.assignment_outcome_model,
+            covariate_names=self.covariate_names,
         )

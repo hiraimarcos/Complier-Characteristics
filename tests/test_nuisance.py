@@ -16,9 +16,11 @@ if str(SRC_ROOT) not in sys.path:
 from complier_characteristics import ComplierDataset
 from complier_characteristics.nuisance import (
     add_intercept,
+    estimate_outcome_responses,
     estimate_propensity_scores,
     estimate_treatment_responses,
     expit,
+    fit_linear_regression,
     fit_logistic_regression,
     fit_probit_regression,
 )
@@ -62,6 +64,18 @@ class LinkAndRegressionTests(unittest.TestCase):
         self.assertTrue(np.all(predictions >= 0.01))
         self.assertTrue(np.all(predictions <= 0.99))
         self.assertGreater(predictions[-1], predictions[0])
+
+    def test_linear_regression_returns_predictions_for_requested_features(self) -> None:
+        predictions = fit_linear_regression(
+            np.array([[0.0], [1.0], [2.0]]),
+            np.array([1.0, 3.0, 5.0]),
+            prediction_features=np.array([[3.0], [4.0]]),
+        )
+
+        np.testing.assert_allclose(predictions, np.array([7.0, 9.0]))
+
+        with self.assertRaisesRegex(ValueError, "two-dimensional"):
+            fit_linear_regression(np.array([0.0, 1.0, 2.0]), np.array([1.0, 3.0, 5.0]))
 
 
 class NuisanceEstimatorTests(unittest.TestCase):
@@ -153,6 +167,44 @@ class NuisanceEstimatorTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "Each instrument stratum"):
             estimate_treatment_responses(one_stratum, model="constant")
+
+    def test_constant_and_linear_outcome_models_estimate_assignment_responses(self) -> None:
+        dataset = ComplierDataset.from_arrays(
+            instrument=[0, 0, 0, 1, 1, 1],
+            treatment=[0, 1, 0, 1, 0, 1],
+            outcome=[1.0, 3.0, 5.0, 9.0, 11.0, 13.0],
+            covariates={"x": [0.0, 1.0, 2.0, 0.0, 1.0, 2.0]},
+        )
+
+        outcome_if_z0, outcome_if_z1 = estimate_outcome_responses(dataset, model="constant")
+        np.testing.assert_allclose(outcome_if_z0, np.full(dataset.n_obs, 3.0))
+        np.testing.assert_allclose(outcome_if_z1, np.full(dataset.n_obs, 11.0))
+
+        outcome_if_z0, outcome_if_z1 = estimate_outcome_responses(
+            dataset,
+            model="linear",
+            covariate_names=["x"],
+        )
+        np.testing.assert_allclose(outcome_if_z0, np.array([1.0, 3.0, 5.0, 1.0, 3.0, 5.0]))
+        np.testing.assert_allclose(outcome_if_z1, np.array([9.0, 11.0, 13.0, 9.0, 11.0, 13.0]))
+
+    def test_outcome_models_reject_unknown_models_and_missing_strata(self) -> None:
+        dataset = ComplierDataset.from_arrays(
+            instrument=[0, 1],
+            treatment=[0, 1],
+            outcome=[1.0, 2.0],
+        )
+
+        with self.assertRaisesRegex(ValueError, "Unsupported outcome model"):
+            estimate_outcome_responses(dataset, model="forest")
+
+        one_stratum = ComplierDataset.from_arrays(
+            instrument=[1, 1],
+            treatment=[0, 1],
+            outcome=[1.0, 2.0],
+        )
+        with self.assertRaisesRegex(ValueError, "Each instrument stratum"):
+            estimate_outcome_responses(one_stratum, model="constant")
 
 
 if __name__ == "__main__":

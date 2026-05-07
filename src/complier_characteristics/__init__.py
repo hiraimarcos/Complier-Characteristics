@@ -10,9 +10,15 @@ The package is intentionally small. The main entry points are:
 from .api import ComplierEstimator
 from .data import ComplierDataset
 from .diagnostics import ComplierDiagnostics
-from .results import ComplierResult, DistributionEstimate, ScalarEstimate
+from .results import (
+    AssignmentEffectEstimate,
+    ComplierResult,
+    DistributionEstimate,
+    ScalarEstimate,
+)
 
 __all__ = [
+    "AssignmentEffectEstimate",
     "ComplierDataset",
     "ComplierDiagnostics",
     "ComplierEstimator",

@@ -28,6 +28,14 @@ def make_fixed_dataset() -> ComplierDataset:
     )
 
 
+def make_assignment_dataset() -> ComplierDataset:
+    return ComplierDataset.from_arrays(
+        instrument=[0, 0, 1, 1],
+        treatment=[0, 0, 0, 1],
+        outcome=[2.0, 4.0, 8.0, 10.0],
+    )
+
+
 class BackendScoreTests(unittest.TestCase):
     def test_abadie_backend_constructs_expected_scores_and_diagnostics(self) -> None:
         dataset = make_fixed_dataset()
@@ -94,13 +102,20 @@ class ResultFunctionalTests(unittest.TestCase):
         )
 
         self.assertAlmostEqual(result.mean("x").estimate, 20.0)
+        self.assertAlmostEqual(result.mean("x").standard_error, np.sqrt(150.0))
         self.assertAlmostEqual(result.mean(lambda data: data.covariates["x"] + 1.0).estimate, 21.0)
         self.assertAlmostEqual(result.share("high").estimate, 1.0)
+        self.assertAlmostEqual(result.share("high").standard_error, np.sqrt(0.5))
         self.assertAlmostEqual(result.variance("x").estimate, 200.0)
+        self.assertAlmostEqual(result.variance("x").standard_error, np.sqrt(25000.0))
 
         cdf = result.cdf("x", grid=[15.0, 25.0, 35.0, 45.0])
         np.testing.assert_allclose(cdf.grid, np.array([15.0, 25.0, 35.0, 45.0]))
         np.testing.assert_allclose(cdf.values, np.array([0.5, 1.0, 1.0, 1.0]))
+        np.testing.assert_allclose(
+            cdf.standard_errors,
+            np.array([0.5, np.sqrt(0.5), 0.5, 0.0]),
+        )
 
     def test_moments_remain_complier_ratios_when_scores_are_not_normalized(self) -> None:
         dataset = make_fixed_dataset()
@@ -133,8 +148,148 @@ class ResultFunctionalTests(unittest.TestCase):
         self.assertEqual(set(summary["x"]), {"mean", "variance"})
         self.assertEqual(set(summary["high"]), {"mean", "variance", "share"})
 
+    def test_assignment_ate_ipw_matches_hand_calculation(self) -> None:
+        dataset = make_assignment_dataset()
+        result = ComplierEstimator(backend="abadie").fit(
+            dataset,
+            propensity_scores=np.full(dataset.n_obs, 0.5),
+        )
+
+        estimate = result.assignment_ate()
+
+        self.assertEqual(estimate.name, "outcome")
+        self.assertEqual(estimate.method, "ipw")
+        self.assertAlmostEqual(estimate.assigned_mean, 9.0)
+        self.assertAlmostEqual(estimate.unassigned_mean, 3.0)
+        self.assertAlmostEqual(estimate.estimate, 6.0)
+        self.assertAlmostEqual(estimate.standard_error, np.sqrt(37.0))
+
+    def test_assignment_ate_accepts_explicit_outcome_feature_and_method_option(self) -> None:
+        dataset = make_assignment_dataset()
+        propensities = np.array([0.4, 0.6, 0.8, 0.5])
+        custom_outcome = np.array([1.0, 3.0, 5.0, 7.0])
+        result = ComplierEstimator(backend="abadie").fit(
+            dataset,
+            propensity_scores=propensities,
+        )
+
+        estimate = result.assignment_ate(custom_outcome, method="ipw", name="custom")
+
+        expected_assigned = float(np.mean(dataset.instrument * custom_outcome / propensities))
+        expected_unassigned = float(
+            np.mean((1.0 - dataset.instrument) * custom_outcome / (1.0 - propensities))
+        )
+        self.assertEqual(estimate.name, "custom")
+        self.assertAlmostEqual(estimate.assigned_mean, expected_assigned)
+        self.assertAlmostEqual(estimate.unassigned_mean, expected_unassigned)
+        self.assertAlmostEqual(estimate.estimate, expected_assigned - expected_unassigned)
+        self.assertIsNotNone(estimate.standard_error)
+
+    def test_assignment_ate_dr_matches_hand_calculation_with_supplied_outcome_models(self) -> None:
+        dataset = make_assignment_dataset()
+        propensities = np.array([0.4, 0.6, 0.8, 0.5])
+        outcome_if_z0 = np.array([2.5, 3.5, 4.5, 5.5])
+        outcome_if_z1 = np.array([7.5, 8.5, 9.5, 10.5])
+        result = ComplierEstimator(backend="abadie").fit(
+            dataset,
+            propensity_scores=propensities,
+        )
+
+        estimate = result.assignment_ate(
+            method="dr",
+            outcome_if_z0=outcome_if_z0,
+            outcome_if_z1=outcome_if_z1,
+        )
+
+        z = dataset.instrument
+        y = dataset.outcome
+        expected_assigned = float(np.mean(outcome_if_z1 + z * (y - outcome_if_z1) / propensities))
+        expected_unassigned = float(
+            np.mean(outcome_if_z0 + (1.0 - z) * (y - outcome_if_z0) / (1.0 - propensities))
+        )
+        self.assertEqual(estimate.method, "dr")
+        self.assertAlmostEqual(estimate.assigned_mean, expected_assigned)
+        self.assertAlmostEqual(estimate.unassigned_mean, expected_unassigned)
+        self.assertAlmostEqual(estimate.estimate, expected_assigned - expected_unassigned)
+        self.assertIsNotNone(estimate.standard_error)
+
+    def test_assignment_ate_dr_on_result_estimates_default_outcome_model(self) -> None:
+        dataset = make_assignment_dataset()
+        result = ComplierEstimator(backend="abadie").fit(
+            dataset,
+            propensity_scores=np.full(dataset.n_obs, 0.5),
+        )
+
+        estimate = result.assignment_ate(method="dr")
+
+        self.assertEqual(estimate.method, "dr")
+        self.assertAlmostEqual(estimate.assigned_mean, 9.0)
+        self.assertAlmostEqual(estimate.unassigned_mean, 3.0)
+        self.assertAlmostEqual(estimate.estimate, 6.0)
+        self.assertAlmostEqual(estimate.standard_error, 1.0)
+
+    def test_assignment_ate_validates_method_and_default_outcome(self) -> None:
+        dataset = make_fixed_dataset()
+        result = ComplierEstimator(backend="abadie").fit(
+            dataset,
+            propensity_scores=np.full(dataset.n_obs, 0.5),
+        )
+
+        with self.assertRaisesRegex(ValueError, "requires an outcome"):
+            result.assignment_ate()
+
+        with self.assertRaisesRegex(ValueError, "Unsupported assignment ATE method"):
+            result.assignment_ate([1.0, 2.0, 3.0, 4.0], method="aipw")
+
+        with self.assertRaisesRegex(ValueError, "outcome_if_z0 and outcome_if_z1"):
+            result.assignment_ate(
+                [1.0, 2.0, 3.0, 4.0],
+                method="dr",
+                outcome_if_z0=np.zeros(dataset.n_obs),
+            )
+
 
 class EstimatorApiTests(unittest.TestCase):
+    def test_assignment_ate_on_estimator_does_not_require_first_stage(self) -> None:
+        dataset = ComplierDataset.from_arrays(
+            instrument=[0, 0, 1, 1],
+            treatment=[0, 1, 0, 1],
+            outcome=[2.0, 4.0, 8.0, 10.0],
+        )
+
+        estimate = ComplierEstimator(propensity_model="constant").assignment_ate(dataset)
+
+        self.assertAlmostEqual(estimate.assigned_mean, 9.0)
+        self.assertAlmostEqual(estimate.unassigned_mean, 3.0)
+        self.assertAlmostEqual(estimate.estimate, 6.0)
+
+    def test_assignment_ate_dr_on_estimator_uses_outcome_model_without_first_stage(self) -> None:
+        dataset = ComplierDataset.from_arrays(
+            instrument=[0, 0, 1, 1],
+            treatment=[0, 1, 0, 1],
+            outcome=[2.0, 4.0, 8.0, 10.0],
+        )
+
+        estimate = ComplierEstimator(propensity_model="constant").assignment_ate(
+            dataset,
+            method="dr",
+        )
+
+        self.assertEqual(estimate.method, "dr")
+        self.assertAlmostEqual(estimate.assigned_mean, 9.0)
+        self.assertAlmostEqual(estimate.unassigned_mean, 3.0)
+        self.assertAlmostEqual(estimate.estimate, 6.0)
+
+    def test_assignment_ate_rejects_partial_external_outcome_models(self) -> None:
+        dataset = make_assignment_dataset()
+
+        with self.assertRaisesRegex(ValueError, "must be supplied together"):
+            ComplierEstimator().assignment_ate(
+                dataset,
+                method="dr",
+                outcome_if_z0=np.zeros(dataset.n_obs),
+            )
+
     def test_fit_rejects_unsupported_backend_and_partial_treatment_nuisances(self) -> None:
         dataset = make_fixed_dataset()
 
