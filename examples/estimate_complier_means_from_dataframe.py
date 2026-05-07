@@ -203,6 +203,16 @@ def main() -> None:
             "estimate": _masked_mean(outcome, treatment == 1.0),
             "standard_error": np.nan,
         },
+        {
+            "estimand": "Observed E[Y | Z = 0]",
+            "estimate": _masked_mean(outcome, instrument == 0.0),
+            "standard_error": np.nan,
+        },
+        {
+            "estimand": "Observed E[Y | Z = 1]",
+            "estimate": _masked_mean(outcome, instrument == 1.0),
+            "standard_error": np.nan,
+        },
     ]
     for d_value in [0, 1]:
         for z_value in [0, 1]:
