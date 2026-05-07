@@ -12,6 +12,7 @@ The first version is intentionally narrow and readable:
 - Abadie-style `kappa` weighting as the default backend
 - an optional doubly robust backend for average complier characteristics
 - helpers for means, variances, subgroup shares, and empirical CDFs
+- IPW estimators for `E[Y_0 | D_1 > D_0]` and `E[Y_1 | D_1 > D_0]`
 - IPW and doubly robust estimators for the average effect of instrument
   assignment
 - analytical fixed-nuisance standard errors for scalar estimates
@@ -65,7 +66,7 @@ x = rng.normal(size=n)
 z = rng.binomial(1, 0.5, size=n)
 complier = rng.binomial(1, 1 / (1 + np.exp(-(0.2 + 0.8 * x))), size=n)
 d = z * complier
-y = 1.0 + 0.2 * z + 0.5 * x + rng.normal(scale=0.25, size=n)
+y = 1.0 + 0.2 * d + 0.5 * x + rng.normal(scale=0.25, size=n)
 
 dataset = ComplierDataset.from_arrays(
     instrument=z,
@@ -87,6 +88,8 @@ result = estimator.fit(dataset)
 mean_x = result.mean("x")
 share_high_x = result.share("high_x")
 cdf_x = result.cdf("x", grid=np.linspace(-2.0, 2.0, 5))
+untreated_mean = result.untreated_outcome_mean()
+treated_mean = result.treated_outcome_mean()
 assignment_effect = result.assignment_ate(method="ipw")
 
 print(mean_x.estimate)
@@ -94,6 +97,8 @@ print(mean_x.standard_error)
 print(share_high_x.estimate)
 print(cdf_x.values)
 print(cdf_x.standard_errors)
+print(untreated_mean.estimate)
+print(treated_mean.estimate)
 print(assignment_effect.estimate)
 print(assignment_effect.standard_error)
 print(result.diagnostics.to_dict())
@@ -178,6 +183,9 @@ The fitted result object exposes common descriptive functionals:
 - `share(feature)`
 - `cdf(feature, grid)`
 - `moment(feature)`
+- `potential_outcome_mean(treatment_value, outcome="outcome")`
+- `untreated_outcome_mean(outcome="outcome")`
+- `treated_outcome_mean(outcome="outcome")`
 - `assignment_ate(outcome="outcome", method="ipw")`
 - `assignment_ate(outcome="outcome", method="dr")`
 - `summarize_covariates(names=None)`
@@ -194,9 +202,17 @@ Examples:
 result.mean("x")
 result.share(lambda data: data.covariates["x"] > 0)
 result.mean(np.square(dataset.covariates["x"]))
+result.untreated_outcome_mean()
+result.treated_outcome_mean()
+result.potential_outcome_mean(0)
 result.assignment_ate(method="ipw")
 result.assignment_ate(method="dr")
 ```
+
+`untreated_outcome_mean` estimates `E[Y_0 | D_1 > D_0]`, and
+`treated_outcome_mean` estimates `E[Y_1 | D_1 > D_0]`. These methods use
+inverse-assignment weighted contrasts of observed untreated or treated outcomes
+and accept the same outcome feature inputs as `assignment_ate`.
 
 `assignment_ate` estimates the average effect of instrument assignment `Z` on an
 outcome using propensity scores `P(Z=1 | X)`. The default outcome is the

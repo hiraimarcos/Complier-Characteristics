@@ -178,8 +178,43 @@ def main() -> None:
         propensity_model="logit",
     )
 
+    if result.dataset.outcome is None:
+        raise ValueError("The example outcome summary requires an outcome column.")
+
+    outcome = result.dataset.outcome
+    treated = result.dataset.treatment.astype(bool)
+    untreated_mean = result.untreated_outcome_mean()
+    treated_mean = result.treated_outcome_mean()
+    outcome_means = pd.DataFrame(
+        [
+            {
+                "estimand": "Observed E[Y | D = 0]",
+                "estimate": float(outcome[~treated].mean()),
+                "standard_error": np.nan,
+            },
+            {
+                "estimand": "Observed E[Y | D = 1]",
+                "estimate": float(outcome[treated].mean()),
+                "standard_error": np.nan,
+            },
+            {
+                "estimand": "E[Y_0 | D_1 > D_0]",
+                "estimate": untreated_mean.estimate,
+                "standard_error": untreated_mean.standard_error,
+            },
+            {
+                "estimand": "E[Y_1 | D_1 > D_0]",
+                "estimate": treated_mean.estimate,
+                "standard_error": treated_mean.standard_error,
+            },
+        ]
+    )
+
     print("Complier means")
     print(means.round(4).to_string(index=False))
+
+    print("\nOutcome means")
+    print(outcome_means.round(4).to_string(index=False))
 
     diagnostics = result.diagnostics.to_dict()
     print("\nDiagnostics")

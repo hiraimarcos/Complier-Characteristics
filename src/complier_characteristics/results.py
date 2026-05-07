@@ -292,6 +292,89 @@ class ComplierResult:
             standard_errors=standard_errors,
         )
 
+    def potential_outcome_mean(
+        self,
+        treatment_value: int,
+        outcome: FeatureSpec = "outcome",
+        *,
+        name: str | None = None,
+    ) -> ScalarEstimate:
+        """Estimate `E[Y_d | D_1 > D_0]` for `d` equal to 0 or 1.
+
+        This uses inverse-assignment weighted numerator and denominator scores.
+        For `d=0`, the method contrasts untreated outcomes observed when
+        unassigned against untreated outcomes observed when assigned. For
+        `d=1`, it contrasts treated outcomes observed when assigned against
+        treated outcomes observed when unassigned.
+        """
+
+        if treatment_value not in {0, 1}:
+            raise ValueError("treatment_value must be 0 or 1.")
+        if isinstance(outcome, str) and outcome == "outcome" and self.dataset.outcome is None:
+            raise ValueError(
+                "potential_outcome_mean() requires an outcome or an explicit outcome feature."
+            )
+
+        d_value = int(treatment_value)
+        label = name or f"Y_{d_value}"
+        values = self._resolve(outcome, name=str(label))
+        z = self.dataset.instrument
+        d = self.dataset.treatment
+        p = self.propensities
+
+        if d_value == 1:
+            numerator_scores = z * d * values / p - (1.0 - z) * d * values / (1.0 - p)
+            denominator_scores = z * d / p - (1.0 - z) * d / (1.0 - p)
+        else:
+            untreated = 1.0 - d
+            numerator_scores = (
+                (1.0 - z) * untreated * values / (1.0 - p)
+                - z * untreated * values / p
+            )
+            denominator_scores = (
+                (1.0 - z) * untreated / (1.0 - p) - z * untreated / p
+            )
+
+        numerator = float(np.mean(numerator_scores))
+        denominator = float(np.mean(denominator_scores))
+        if abs(denominator) < 1e-10:
+            raise ValueError(
+                "The estimated complier share is numerically zero. "
+                "This usually indicates a vanishing first stage."
+            )
+
+        estimate = numerator / denominator
+        influence_values = (numerator_scores - estimate * denominator_scores) / denominator
+        return ScalarEstimate(
+            name=str(label),
+            estimate=estimate,
+            backend=self.backend,
+            complier_share=denominator,
+            numerator=numerator,
+            denominator=denominator,
+            standard_error=_standard_error_from_influence(influence_values),
+        )
+
+    def untreated_outcome_mean(
+        self,
+        outcome: FeatureSpec = "outcome",
+        *,
+        name: str | None = None,
+    ) -> ScalarEstimate:
+        """Estimate `E[Y_0 | D_1 > D_0]`."""
+
+        return self.potential_outcome_mean(0, outcome=outcome, name=name)
+
+    def treated_outcome_mean(
+        self,
+        outcome: FeatureSpec = "outcome",
+        *,
+        name: str | None = None,
+    ) -> ScalarEstimate:
+        """Estimate `E[Y_1 | D_1 > D_0]`."""
+
+        return self.potential_outcome_mean(1, outcome=outcome, name=name)
+
     def assignment_ate(
         self,
         outcome: FeatureSpec = "outcome",

@@ -36,6 +36,14 @@ def make_assignment_dataset() -> ComplierDataset:
     )
 
 
+def make_potential_outcome_dataset() -> ComplierDataset:
+    return ComplierDataset.from_arrays(
+        instrument=[0, 1, 0, 1, 0, 1, 0, 1],
+        treatment=[0, 0, 0, 1, 0, 1, 1, 1],
+        outcome=[1.0, 1.0, 2.0, 5.0, 4.0, 9.0, 7.0, 7.0],
+    )
+
+
 class BackendScoreTests(unittest.TestCase):
     def test_abadie_backend_constructs_expected_scores_and_diagnostics(self) -> None:
         dataset = make_fixed_dataset()
@@ -228,6 +236,47 @@ class ResultFunctionalTests(unittest.TestCase):
         self.assertAlmostEqual(estimate.estimate, 6.0)
         self.assertAlmostEqual(estimate.standard_error, 1.0)
 
+    def test_potential_outcome_means_match_hand_calculation(self) -> None:
+        dataset = make_potential_outcome_dataset()
+        result = ComplierEstimator(backend="abadie").fit(
+            dataset,
+            propensity_scores=np.full(dataset.n_obs, 0.5),
+        )
+
+        untreated = result.untreated_outcome_mean()
+        treated = result.treated_outcome_mean()
+
+        self.assertEqual(untreated.name, "Y_0")
+        self.assertEqual(treated.name, "Y_1")
+        self.assertAlmostEqual(untreated.numerator, 1.5)
+        self.assertAlmostEqual(treated.numerator, 3.5)
+        self.assertAlmostEqual(untreated.denominator, 0.5)
+        self.assertAlmostEqual(treated.denominator, 0.5)
+        self.assertAlmostEqual(untreated.estimate, 3.0)
+        self.assertAlmostEqual(treated.estimate, 7.0)
+        self.assertIsNotNone(untreated.standard_error)
+        self.assertIsNotNone(treated.standard_error)
+
+    def test_potential_outcome_mean_accepts_generic_and_custom_outcome(self) -> None:
+        dataset = make_potential_outcome_dataset()
+        result = ComplierEstimator(backend="dr").fit(
+            dataset,
+            propensity_scores=np.full(dataset.n_obs, 0.5),
+            treated_if_z0=np.full(dataset.n_obs, 0.25),
+            treated_if_z1=np.full(dataset.n_obs, 0.75),
+        )
+
+        untreated = result.potential_outcome_mean(0)
+        treated_custom = result.potential_outcome_mean(
+            1,
+            np.asarray(dataset.outcome) + 1.0,
+            name="custom_Y_1",
+        )
+
+        self.assertAlmostEqual(untreated.estimate, 3.0)
+        self.assertEqual(treated_custom.name, "custom_Y_1")
+        self.assertAlmostEqual(treated_custom.estimate, 8.0)
+
     def test_assignment_ate_validates_method_and_default_outcome(self) -> None:
         dataset = make_fixed_dataset()
         result = ComplierEstimator(backend="abadie").fit(
@@ -247,6 +296,12 @@ class ResultFunctionalTests(unittest.TestCase):
                 method="dr",
                 outcome_if_z0=np.zeros(dataset.n_obs),
             )
+
+        with self.assertRaisesRegex(ValueError, "requires an outcome"):
+            result.untreated_outcome_mean()
+
+        with self.assertRaisesRegex(ValueError, "treatment_value must be 0 or 1"):
+            result.potential_outcome_mean(2, [1.0, 2.0, 3.0, 4.0])
 
 
 class EstimatorApiTests(unittest.TestCase):
